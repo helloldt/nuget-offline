@@ -1,3 +1,5 @@
+nuget offline packages download browser
+
 <img width="1280" height="762" alt="main" src="https://github.com/user-attachments/assets/7d86cb58-24f2-4f4d-b99f-f67ede07afc5" />
 
 
