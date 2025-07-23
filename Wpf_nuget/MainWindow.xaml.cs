@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Microsoft.EntityFrameworkCore;
 using Wpf_nuget.Data;
 using Wpf_nuget.Models;
 using Wpf_nuget.Services;
@@ -235,6 +236,209 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         catch (Exception ex)
         {
             ShowError($"获取数据库信息失败: {ex.Message}");
+        }
+    }
+
+    private async void BtnExport_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            UpdateStatus("导出中...");
+            
+            // 获取所有已下载的包版本信息
+            var downloadedVersions = await _dbContext.PackageVersions
+                .Include(v => v.Package)
+                .Where(v => v.IsDownloaded)
+                .OrderBy(v => v.Package.Id)
+                .ThenBy(v => v.Version)
+                .ToListAsync();
+
+            if (!downloadedVersions.Any())
+            {
+                MessageBox.Show("没有已下载的包可以导出。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                UpdateStatus("就绪");
+                return;
+            }
+
+            // 选择保存位置
+            var saveDialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "文本文件 (*.txt)|*.txt",
+                FileName = "packages.txt",
+                Title = "导出包信息"
+            };
+
+            if (saveDialog.ShowDialog() == true)
+            {
+                var exportContent = new List<string>();
+                exportContent.Add("# NuGet包导出文件");
+                exportContent.Add($"# 导出时间: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                exportContent.Add($"# 包数量: {downloadedVersions.Count}");
+                exportContent.Add("");
+
+                foreach (var version in downloadedVersions)
+                {
+                    var line = $"{version.Package.Id}|{version.Version}|{version.Package.Title}|{version.Package.Authors}|{version.Package.Description?.Replace("\n", " ").Replace("\r", " ")}|{version.LocalPath ?? ""}";
+                    exportContent.Add(line);
+                }
+
+                await File.WriteAllLinesAsync(saveDialog.FileName, exportContent);
+                
+                UpdateStatus($"导出完成，共导出 {downloadedVersions.Count} 个包版本");
+                MessageBox.Show($"成功导出 {downloadedVersions.Count} 个包版本到:\n{saveDialog.FileName}", 
+                    "导出成功", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                UpdateStatus("导出已取消");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowError($"导出失败: {ex.Message}");
+        }
+    }
+
+    private async void BtnImport_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // 选择导入文件
+            var openDialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "文本文件 (*.txt)|*.txt",
+                Title = "选择包信息文件"
+            };
+
+            if (openDialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            UpdateStatus("读取导入文件中...");
+            
+            var lines = await File.ReadAllLinesAsync(openDialog.FileName);
+            var packageLines = lines.Where(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#")).ToList();
+
+            if (!packageLines.Any())
+            {
+                MessageBox.Show("导入文件中没有找到有效的包信息。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                UpdateStatus("就绪");
+                return;
+            }
+
+            var result = MessageBox.Show($"将要导入 {packageLines.Count} 个包版本，这可能需要一些时间。\n确定要继续吗？", 
+                "确认导入", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            
+            if (result != MessageBoxResult.Yes)
+            {
+                UpdateStatus("导入已取消");
+                return;
+            }
+
+            UpdateStatus("导入中...");
+            int successCount = 0;
+            int errorCount = 0;
+            var errors = new List<string>();
+
+            foreach (var line in packageLines)
+            {
+                try
+                {
+                    var parts = line.Split('|');
+                    if (parts.Length >= 2)
+                    {
+                        var packageId = parts[0].Trim();
+                        var version = parts[1].Trim();
+                        
+                        UpdateStatus($"正在处理: {packageId} {version}...");
+                        
+                        // 检查是否已存在
+                        var existingVersion = await _dbContext.PackageVersions
+                            .FirstOrDefaultAsync(v => v.PackageId == packageId && v.Version == version);
+                        
+                        if (existingVersion?.IsDownloaded == true)
+                        {
+                            continue; // 已下载，跳过
+                        }
+
+                        try
+                        {
+                            // 从API获取包信息
+                            var packageInfo = await _apiService.GetPackageAsync(packageId);
+                            if (packageInfo != null)
+                            {
+                                // 添加或更新包信息
+                                await _dbService.AddOrUpdatePackageAsync(packageInfo);
+                                
+                                // 获取版本信息
+                                var versionInfo = await _apiService.GetPackageVersionAsync(packageId, version);
+                                if (versionInfo != null)
+                                {
+                                    // 下载包
+                                    try
+                                    {
+                                        var downloadedFilePath = await _apiService.DownloadPackageAsync(packageId, version);
+                                        // 更新数据库中的下载状态
+                                        await _dbService.UpdateVersionDownloadStatusAsync(packageId, version, true, downloadedFilePath);
+                                        successCount++;
+                                    }
+                                    catch (Exception downloadEx)
+                                    {
+                                        errors.Add($"{packageId} {version}: 下载失败 - {downloadEx.Message}");
+                                        errorCount++;
+                                    }
+                                }
+                                else
+                                {
+                                    errors.Add($"{packageId} {version}: 获取版本信息失败");
+                                    errorCount++;
+                                }
+                            }
+                            else
+                            {
+                                errors.Add($"{packageId}: 获取包信息失败");
+                                errorCount++;
+                            }
+                        }
+                        catch (Exception downloadEx)
+                        {
+                            // 下载失败，记录错误但继续处理
+                            errors.Add($"{packageId} {version}: 处理失败 - {downloadEx.Message}");
+                            errorCount++;
+                            System.Diagnostics.Debug.WriteLine($"处理包 {packageId} {version} 失败: {downloadEx.Message}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"处理行 '{line}' 时出错: {ex.Message}");
+                    errorCount++;
+                }
+            }
+
+            // 刷新界面
+            await LoadPackagesAsync();
+            await UpdateStatistics();
+
+            var message = $"导入完成！\n成功: {successCount}\n失败: {errorCount}";
+            if (errors.Any())
+            {
+                message += $"\n\n错误详情:\n{string.Join("\n", errors.Take(10))}";
+                if (errors.Count > 10)
+                {
+                    message += $"\n... 还有 {errors.Count - 10} 个错误";
+                }
+            }
+
+            MessageBox.Show(message, "导入结果", MessageBoxButton.OK, 
+                errorCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+            
+            UpdateStatus($"导入完成 - 成功: {successCount}, 失败: {errorCount}");
+        }
+        catch (Exception ex)
+        {
+            ShowError($"导入失败: {ex.Message}");
         }
     }
 

@@ -95,6 +95,10 @@
                 <Button Name="btnCleanup" Content="🗑️ 清理数据库" Click="BtnCleanup_Click" 
                         Style="{StaticResource ModernButtonStyle}" Margin="10,0"/>
                 <Button Name="btnDbInfo" Content="ℹ️ 数据库信息" Click="BtnDbInfo_Click" 
+                        Style="{StaticResource ModernButtonStyle}" Margin="10,0"/>
+                <Button Name="btnExport" Content="📤 导出" Click="BtnExport_Click" 
+                        Style="{StaticResource ModernButtonStyle}" Margin="10,0"/>
+                <Button Name="btnImport" Content="📥 导入" Click="BtnImport_Click" 
                         Style="{StaticResource ModernButtonStyle}" Margin="10,0,0,0"/>
             </StackPanel>
         </Border>

@@ -141,6 +141,76 @@ public class NuGetApiService
 
     #endregion
 
+    #region 包信息获取
+
+    /// <summary>
+    /// 根据包ID获取包信息
+    /// </summary>
+    /// <param name="packageId">包ID</param>
+    /// <returns>包信息</returns>
+    public async Task<NuGetPackage?> GetPackageAsync(string packageId)
+    {
+        try
+        {
+            var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>();
+            var packages = await metadataResource.GetMetadataAsync(
+                packageId,
+                includePrerelease: true,
+                includeUnlisted: false,
+                sourceCacheContext: new SourceCacheContext(),
+                log: _logger,
+                token: CancellationToken.None);
+
+            var latestPackage = packages.OrderByDescending(p => p.Identity.Version).FirstOrDefault();
+            if (latestPackage == null)
+                return null;
+
+            var package = new NuGetPackage
+            {
+                Id = latestPackage.Identity.Id,
+                Title = latestPackage.Title ?? latestPackage.Identity.Id,
+                Description = latestPackage.Description ?? string.Empty,
+                Authors = latestPackage.Authors != null ? string.Join(", ", latestPackage.Authors) : string.Empty,
+                Tags = latestPackage.Tags != null ? string.Join(", ", latestPackage.Tags) : string.Empty,
+                ProjectUrl = latestPackage.ProjectUrl?.ToString() ?? string.Empty,
+                IconUrl = latestPackage.IconUrl?.ToString() ?? string.Empty,
+                LicenseUrl = latestPackage.LicenseUrl?.ToString() ?? string.Empty,
+                DownloadCount = (long)(latestPackage.DownloadCount ?? 0)
+            };
+
+            // 获取版本信息
+            var versions = await GetPackageVersionsAsync(packageId);
+            package.Versions = versions.ToList();
+
+            return package;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"获取包信息失败: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// 根据包ID和版本号获取特定版本信息
+    /// </summary>
+    /// <param name="packageId">包ID</param>
+    /// <param name="version">版本号</param>
+    /// <returns>版本信息</returns>
+    public async Task<NuGetPackageVersion?> GetPackageVersionAsync(string packageId, string version)
+    {
+        try
+        {
+            var versions = await GetPackageVersionsAsync(packageId);
+            return versions.FirstOrDefault(v => v.Version == version);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"获取包版本信息失败: {ex.Message}", ex);
+        }
+    }
+
+    #endregion
+
     #region 下载功能
 
     /// <summary>

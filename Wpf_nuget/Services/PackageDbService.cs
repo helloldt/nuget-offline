@@ -380,6 +380,46 @@ public class PackageDbService
     }
 
     /// <summary>
+    /// 更新包版本下载状态
+    /// </summary>
+    /// <param name="packageId">包ID</param>
+    /// <param name="version">版本号</param>
+    /// <param name="isDownloaded">是否已下载</param>
+    /// <param name="localPath">本地路径（相对路径）</param>
+    /// <returns>是否成功</returns>
+    public async Task<bool> UpdateVersionDownloadStatusAsync(string packageId, string version, bool isDownloaded, string localPath = null)
+    {
+        try
+        {
+            var packageVersion = await _context.PackageVersions
+                .FirstOrDefaultAsync(v => v.PackageId == packageId && v.Version == version);
+
+            if (packageVersion != null)
+            {
+                packageVersion.IsDownloaded = isDownloaded;
+                
+                if (!string.IsNullOrEmpty(localPath))
+                {
+                    packageVersion.LocalPath = localPath;
+                    
+                    // 如果提供了路径，检查文件存在性
+                    var fullPath = GetFullPath(localPath);
+                    packageVersion.IsDownloaded = isDownloaded && File.Exists(fullPath);
+                }
+                
+                await _context.SaveChangesAsync();
+                return true;
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"更新版本下载状态失败: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
     /// 根据相对路径获取完整路径
     /// </summary>
     /// <param name="relativePath">相对路径</param>
